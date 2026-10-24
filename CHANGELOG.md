@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8
+
+- Bound dashboard request concurrency and input sizes to reduce denial-of-service exposure.
+- Validate filters and escape literal search wildcards.
+- Add browser security headers and prevent spreadsheet formula execution in CSV exports.
+- Omit free-text query strings from access logs.
+
 ## 0.1.7
 
 - Recover the failed page from existing error state when resuming an interrupted snapshot.

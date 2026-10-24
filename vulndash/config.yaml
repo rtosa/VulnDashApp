@@ -1,6 +1,6 @@
 name: VulnDash
 slug: vulndash
-version: 0.1.7
+version: 0.1.8
 description: A local EUVD snapshot dashboard with SQLite storage and severity trends
 arch:
   - amd64

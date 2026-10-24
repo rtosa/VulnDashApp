@@ -94,9 +94,9 @@ th{background:rgba(21,35,56,.68)}tbody tr:nth-child(even){background:rgba(16,27,
 <form id="filters" class="filters">
 <div class="field"><label for="minCvss">Minimum CVSS</label><input id="minCvss" type="number" min="0" max="10" step="0.1" value="9.0"></div>
 <div class="field"><label for="days">Publication window</label><select id="days"><option value="1" selected>Last 24 hours</option><option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="60">Last 60 days</option><option value="90">Last 90 days</option><option value="120">Last 120 days</option><option value="365">Last year</option><option value="1095">Last 3 years</option><option value="1827">Last 5 years</option></select></div>
-<div class="field"><label for="vendor">Vendor</label><input id="vendor" type="text" placeholder="e.g. MikroTik"></div>
-<div class="field"><label for="productFilter">Product</label><input id="productFilter" type="text" placeholder="e.g. RouterOS"></div>
-<div class="field"><label for="textFilter">Free text</label><input id="textFilter" type="text" placeholder="CVE ID, keyword, description…"></div>
+<div class="field"><label for="vendor">Vendor</label><input id="vendor" type="text" maxlength="128" placeholder="e.g. MikroTik"></div>
+<div class="field"><label for="productFilter">Product</label><input id="productFilter" type="text" maxlength="128" placeholder="e.g. RouterOS"></div>
+<div class="field"><label for="textFilter">Free text</label><input id="textFilter" type="text" maxlength="256" placeholder="CVE ID, keyword, description…"></div>
 <div class="field"><label for="sort">Sort by</label><select id="sort"><option value="published" selected>Publication date</option><option value="updated">Last updated</option></select></div>
 <div class="field"><label for="perPage">Rows per page</label><select id="perPage"><option>25</option><option selected>50</option><option>100</option></select></div>
 <button id="fetchBtn" type="submit">Fetch CVEs</button>
@@ -171,7 +171,8 @@ $('sort').addEventListener('change',()=>{sortKey=$('sort').value==='updated'?'up
 document.querySelectorAll('th button[data-sort]').forEach(b=>b.addEventListener('click',()=>{const k=b.dataset.sort==='date_published'?'published':b.dataset.sort;if(sortKey===k)sortDir=sortDir==='desc'?'asc':'desc';else{sortKey=k;sortDir='desc'}if(k==='published')$('sort').value='published';else if(k==='updated')$('sort').value='updated';sortResults();render()}));
 $('rows').addEventListener('click',e=>{const pa=e.target.closest('[data-product-expand]');if(pa){e.preventDefault();const i=pa.dataset.productExpand,full=$('product-full-'+i),short=$('product-'+i),open=!full.hidden;full.hidden=open;short.hidden=!open;pa.textContent=open?'More':'Less';return}const a=e.target.closest('[data-expand]');if(!a)return;e.preventDefault();const i=a.dataset.expand,full=$('full-'+i),short=$('desc-'+i),open=!full.hidden;full.hidden=open;short.hidden=!open;a.textContent=open?'More':'Less'});
 window.addEventListener('resize',drawSeverityChart);drawSeverityChart();
-$('csvBtn').addEventListener('click',()=>{const rows=[['CVE ID','Published','CVSS','Severity','Vendor','Product','Description'],...results.map(x=>[cveId(x),fmtDate(getDate(x)),valCvss(x)??'',severity(valCvss(x)),getVendor(x),getProduct(x),getDesc(x)])];const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='cve-dashboard.csv';a.click();URL.revokeObjectURL(url)});
+function csvCell(value){let text=String(value??'');if(/^[\s]*[=+\-@]/.test(text))text="'"+text;return '"'+text.replace(/"/g,'""')+'"'}
+$('csvBtn').addEventListener('click',()=>{const rows=[['CVE ID','Published','CVSS','Severity','Vendor','Product','Description'],...results.map(x=>[cveId(x),fmtDate(getDate(x)),valCvss(x)??'',severity(valCvss(x)),getVendor(x),getProduct(x),getDesc(x)])];const csv=rows.map(r=>r.map(csvCell).join(',')).join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='cve-dashboard.csv';a.click();URL.revokeObjectURL(url)});
 </script></body></html>
 
 

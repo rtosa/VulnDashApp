@@ -41,6 +41,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 CVE_RE = re.compile(r"CVE-\d{4}-\d+", re.IGNORECASE)
+MAX_QUERY_PAGE = 10_000
+MAX_FILTER_LENGTHS = {"vendor": 128, "product": 128, "text": 256}
+MAX_CHART_BINS = 600
+MAX_HTTP_WORKERS = 8
 
 
 def utc_now() -> datetime:
@@ -272,6 +276,74 @@ def severity(score: float | None) -> str:
     return "None"
 
 
+def build_filter_sql(query: dict[str, list[str]]) -> tuple[str, list[object]]:
+    def first(name: str) -> str:
+        return query.get(name, [""])[0].strip()
+
+    try:
+        minimum = float(first("fromScore") or 0)
+    except ValueError as error:
+        raise ValueError("Invalid minimum CVSS score") from error
+    if not math.isfinite(minimum) or not 0 <= minimum <= 10:
+        raise ValueError("Minimum CVSS must be between 0 and 10")
+
+    date_from = first("fromDate")
+    date_to = first("toDate")
+    parsed_from = parsed_to = None
+    for label, value in (("fromDate", date_from), ("toDate", date_to)):
+        if not value:
+            continue
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError(f"Invalid {label}; expected YYYY-MM-DD") from error
+        if parsed.isoformat() != value:
+            raise ValueError(f"Invalid {label}; expected YYYY-MM-DD")
+        if label == "fromDate":
+            parsed_from = parsed
+        else:
+            parsed_to = parsed
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise ValueError("fromDate must not be later than toDate")
+
+    filters = {name: first(name) for name in MAX_FILTER_LENGTHS}
+    for name, value in filters.items():
+        if len(value) > MAX_FILTER_LENGTHS[name]:
+            raise ValueError(f"{name} filter is too long")
+
+    clauses: list[str] = []
+    values: list[object] = []
+    if parsed_from:
+        clauses.append("published_at >= ?")
+        values.append(parsed_from.isoformat() + "T00:00:00Z")
+    if parsed_to:
+        clauses.append("published_at < ?")
+        values.append((parsed_to + timedelta(days=1)).isoformat() + "T00:00:00Z")
+    if minimum > 0:
+        clauses.append("cvss >= ?")
+        values.append(minimum)
+
+    def contains_pattern(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
+    for name in ("vendor", "product"):
+        if filters[name]:
+            clauses.append(f"{name} LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            values.append(contains_pattern(filters[name]))
+    if filters["text"]:
+        clauses.append(
+            "(cve_id LIKE ? ESCAPE '\\' COLLATE NOCASE OR record_key LIKE ? ESCAPE '\\' COLLATE NOCASE "
+            "OR vendor LIKE ? ESCAPE '\\' COLLATE NOCASE OR product LIKE ? ESCAPE '\\' COLLATE NOCASE "
+            "OR description LIKE ? ESCAPE '\\' COLLATE NOCASE)"
+        )
+        pattern = contains_pattern(filters["text"])
+        values.extend([pattern] * 5)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, values
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = path
@@ -433,48 +505,24 @@ class Database:
 
     def chart(self, query: dict[str, list[str]]) -> dict:
         raw_bins = query.get("bins", [""])[0]
+        if len(raw_bins) > MAX_CHART_BINS * 20:
+            raise ValueError("Chart request is too large")
         try:
             starts = [int(value) for value in raw_bins.split(",") if value]
-            minimum = float(query.get("fromScore", ["0"])[0] or 0)
         except ValueError as error:
-            raise ValueError("Invalid chart bins or score filter") from error
-        if not starts or len(starts) > 600 or not math.isfinite(minimum):
+            raise ValueError("Invalid chart bins") from error
+        if (
+            not starts
+            or len(starts) > MAX_CHART_BINS
+            or starts != sorted(set(starts))
+            or any(value < 0 for value in starts)
+        ):
             raise ValueError("Invalid chart request")
+        where, values = build_filter_sql(query)
         bins = [
             {"time": start, "Critical": 0, "High": 0, "Medium": 0, "Low": 0}
             for start in starts
         ]
-        clauses: list[str] = []
-        values: list[object] = []
-        date_from = query.get("fromDate", [""])[0]
-        date_to = query.get("toDate", [""])[0]
-        if date_from:
-            clauses.append("date(published_at) >= date(?)")
-            values.append(date_from)
-        if date_to:
-            clauses.append("date(published_at) <= date(?)")
-            values.append(date_to)
-        if minimum > 0:
-            clauses.append("cvss >= ?")
-            values.append(minimum)
-        vendor = query.get("vendor", [""])[0].strip()
-        product = query.get("product", [""])[0].strip()
-        text = query.get("text", [""])[0].strip()
-        if vendor:
-            clauses.append("vendor LIKE ? COLLATE NOCASE")
-            values.append("%" + vendor + "%")
-        if product:
-            clauses.append("product LIKE ? COLLATE NOCASE")
-            values.append("%" + product + "%")
-        if text:
-            clauses.append(
-                "(cve_id LIKE ? COLLATE NOCASE OR record_key LIKE ? COLLATE NOCASE "
-                "OR vendor LIKE ? COLLATE NOCASE OR product LIKE ? COLLATE NOCASE "
-                "OR description LIKE ? COLLATE NOCASE)"
-            )
-            pattern = "%" + text + "%"
-            values.extend([pattern] * 5)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = "SELECT published_at,cvss FROM vulnerabilities" + where
         sql += " AND published_at IS NOT NULL" if where else " WHERE published_at IS NOT NULL"
         connection = self.connect()
@@ -496,6 +544,7 @@ class Database:
             return {"bins": bins, "total": matched}
         finally:
             connection.close()
+
     def record_count(self) -> int:
         connection = self.connect()
         try:
@@ -508,56 +557,31 @@ class Database:
             return query.get(name, [default])[0]
 
         try:
-            page = max(0, int(first("page", "0")))
-            size = max(1, min(100, int(first("size", "50"))))
-            minimum = float(first("fromScore", "0") or 0)
+            page = int(first("page", "0"))
+            size = int(first("size", "50"))
         except ValueError as error:
-            raise ValueError("Invalid pagination or score filter") from error
-        if not math.isfinite(minimum):
-            raise ValueError("Invalid minimum score")
+            raise ValueError("Invalid pagination") from error
+        if page < 0 or page > MAX_QUERY_PAGE:
+            raise ValueError("Page is outside the supported range")
+        if size < 1 or size > 100:
+            raise ValueError("Page size must be between 1 and 100")
 
-        clauses: list[str] = []
-        values: list[object] = []
-        date_from = first("fromDate")
-        date_to = first("toDate")
-        if date_from:
-            clauses.append("date(published_at) >= date(?)")
-            values.append(date_from)
-        if date_to:
-            clauses.append("date(published_at) <= date(?)")
-            values.append(date_to)
-        if minimum > 0:
-            clauses.append("cvss >= ?")
-            values.append(minimum)
-        vendor = first("vendor").strip()
-        product = first("product").strip()
-        text = first("text").strip()
-        if vendor:
-            clauses.append("vendor LIKE ? COLLATE NOCASE")
-            values.append("%" + vendor + "%")
-        if product:
-            clauses.append("product LIKE ? COLLATE NOCASE")
-            values.append("%" + product + "%")
-        if text:
-            clauses.append(
-                "(cve_id LIKE ? COLLATE NOCASE OR record_key LIKE ? COLLATE NOCASE "
-                "OR vendor LIKE ? COLLATE NOCASE OR product LIKE ? COLLATE NOCASE "
-                "OR description LIKE ? COLLATE NOCASE)"
-            )
-            pattern = "%" + text + "%"
-            values.extend([pattern] * 5)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where, values = build_filter_sql(query)
         connection = self.connect()
         try:
             total = int(
                 connection.execute("SELECT COUNT(*) FROM vulnerabilities" + where, values).fetchone()[0]
             )
-            rows = connection.execute(
-                "SELECT payload_json FROM vulnerabilities"
-                + where
-                + " ORDER BY published_at DESC, record_key ASC LIMIT ? OFFSET ?",
-                [*values, size, page * size],
-            ).fetchall()
+            offset = page * size
+            if offset >= total:
+                rows = []
+            else:
+                rows = connection.execute(
+                    "SELECT payload_json FROM vulnerabilities"
+                    + where
+                    + " ORDER BY published_at DESC, record_key ASC LIMIT ? OFFSET ?",
+                    [*values, size, offset],
+                ).fetchall()
             items = []
             for row in rows:
                 try:
@@ -615,7 +639,7 @@ class SnapshotSync:
                 response = subprocess.run(
                     [
                         "curl", "--silent", "--show-error", "--location",
-                        "--max-time", "60", "--write-out",
+                        "--max-time", "60", "--max-filesize", "20971520", "--write-out",
                         "\nVULNDASH_HTTP_STATUS:%{http_code}", url,
                     ],
                     capture_output=True,
@@ -816,12 +840,23 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(APP_DIR), **kwargs)
 
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; form-action 'self'",
+        )
+        super().end_headers()
+
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -854,7 +889,8 @@ class Handler(SimpleHTTPRequestHandler):
         path = self.normalize_path(parsed.path).rstrip("/") or "/"
         if path == "/api/vulnerabilities":
             try:
-                self.send_json(200, DATABASE.search(parse_qs(parsed.query, keep_blank_values=True)))
+                query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=32)
+                self.send_json(200, DATABASE.search(query))
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
             except Exception:
@@ -863,7 +899,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/chart":
             try:
-                self.send_json(200, DATABASE.chart(parse_qs(parsed.query, keep_blank_values=True)))
+                query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=32)
+                self.send_json(200, DATABASE.chart(query))
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
             except Exception:
@@ -893,12 +930,54 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def log_message(self, fmt, *args):
-        LOGGER.info("%s - %s", self.address_string(), fmt % args)
+        # Query strings can contain free-text searches; keep them out of Supervisor logs.
+        path = urlsplit(self.path).path if getattr(self, "path", None) else "-"
+        status = args[1] if fmt.startswith('"%s" %s %s') and len(args) > 1 else "-"
+        LOGGER.info("%s - %s %s %s", self.client_address[0], self.command or "-", path, status)
 
 
 class DashboardServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 32
+
+    def __init__(self, *args, **kwargs):
+        self._worker_slots = threading.BoundedSemaphore(MAX_HTTP_WORKERS)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(15)
+        return request, client_address
+
+    def process_request(self, request, client_address):
+        if not self._worker_slots.acquire(timeout=0.5):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Retry-After: 2\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        worker = threading.Thread(
+            target=self.process_request_thread,
+            args=(request, client_address),
+            daemon=self.daemon_threads,
+        )
+        try:
+            worker.start()
+        except Exception:
+            self._worker_slots.release()
+            self.shutdown_request(request)
+            self.handle_error(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
 
 
 def main() -> None:
