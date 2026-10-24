@@ -1,11 +1,12 @@
 name: VulnDash
 slug: vulndash
-version: 0.1.0
+version: 0.1.1
 description: A local EUVD snapshot dashboard with SQLite storage and severity trends
 arch:
   - amd64
   - aarch64
 startup: application
+init: false
 boot: auto
 ingress: true
 ingress_port: 8099
