@@ -1,4 +1,4 @@
-FROM ghcr.io/home-assistant/base:latest
+FROM ghcr.io/home-assistant/base-python:3.14-alpine3.24
 
 ARG BUILD_VERSION=0.1.0
 ARG BUILD_ARCH=amd64
@@ -7,7 +7,6 @@ LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \
       io.hass.arch="${BUILD_ARCH}"
 
-RUN apk add --no-cache python3 py3-sqlite3
 
 WORKDIR /app
 COPY server.py index.html /app/
