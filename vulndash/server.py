@@ -34,7 +34,7 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 INGRESS_MODE = os.environ.get("HA_INGRESS", "0").lower() in ("1", "true", "yes")
 PAGE_SIZE = 100
 FULL_REFRESH_DAYS = 7
-REQUEST_PAUSE_SECONDS = 0.5
+REQUEST_PAUSE_SECONDS = 5.0
 LOGGER = logging.getLogger("vulndash")
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -632,9 +632,9 @@ class SnapshotSync:
                 if status >= 400:
                     detail = body[:512].strip()
                     suffix = f": {detail}" if detail else ""
-                    if status not in (429, 500, 502, 503, 504) or attempt == 4:
+                    if status not in (403, 429, 500, 502, 503, 504) or attempt == 4:
                         raise RuntimeError(f"EUVD returned HTTP {status} for {url}{suffix}")
-                    delay = min(60, 2 ** attempt)
+                    delay = (15, 30, 60, 120)[attempt] if status == 403 else min(60, 2 ** attempt)
                     LOGGER.warning("EUVD HTTP %s; retrying in %s seconds", status, delay)
                     time.sleep(delay)
                     continue
@@ -647,14 +647,29 @@ class SnapshotSync:
                 time.sleep(delay)
         return []
 
-    def fetch_window(self, start: date, end: date, phase: str, window_index: int, window_count: int) -> int:
+    def fetch_window(
+        self, start: date, end: date, phase: str, window_index: int,
+        window_count: int, start_page: int = 0,
+    ) -> int:
         processed = 0
-        page = 0
+        page = max(0, start_page)
         while page < 500:
             items = self.fetch_page(start, end, page)
             if not items:
+                if phase == "full":
+                    self.database.set_state(
+                        sync_phase=phase,
+                        sync_progress=f"Completed {start:%b %Y} · window {window_index}/{window_count}",
+                        full_sync_window=window_index + 1,
+                        full_sync_page=0,
+                    )
                 break
             processed += self.database.upsert(items)
+            next_window, next_page = (window_index, page + 1) if len(items) == PAGE_SIZE else (window_index + 1, 0)
+            checkpoint = (
+                {"full_sync_window": next_window, "full_sync_page": next_page}
+                if phase == "full" else {}
+            )
             self.database.set_state(
                 sync_phase=phase,
                 sync_progress=(
@@ -662,6 +677,7 @@ class SnapshotSync:
                     f"window {window_index}/{window_count} · page {page + 1} · "
                     f"{processed} records processed in this window"
                 ),
+                **checkpoint,
             )
             if len(items) < PAGE_SIZE:
                 break
@@ -675,21 +691,40 @@ class SnapshotSync:
         today = utc_now().date()
         cutoff = years_ago(today, HISTORY_YEARS)
         windows = list(month_windows(cutoff, today))
+        state = self.database.get_state()
+        if state.get("full_sync_from") == cutoff.isoformat() and state.get("full_sync_to") == today.isoformat():
+            try:
+                resume_window = max(1, int(state.get("full_sync_window", "1")))
+                resume_page = max(0, int(state.get("full_sync_page", "0")))
+            except ValueError:
+                resume_window, resume_page = 1, 0
+            if resume_window > len(windows) + 1:
+                resume_window, resume_page = 1, 0
+        else:
+            resume_window, resume_page = 1, 0
         self.database.set_state(
             sync_phase="full",
-            sync_progress=f"Refreshing {HISTORY_YEARS} years · 0/{len(windows)} monthly windows",
+            sync_progress=f"Refreshing {HISTORY_YEARS} years · resuming window {resume_window}/{len(windows)}",
             last_error="",
+            full_sync_from=cutoff.isoformat(),
+            full_sync_to=today.isoformat(),
+            full_sync_window=resume_window,
+            full_sync_page=resume_page,
         )
         LOGGER.info(
-            "Starting full snapshot: %s years across %s monthly windows (%s through %s)",
+            "Starting full snapshot: %s years across %s monthly windows (%s through %s); resuming at window %s, page %s",
             HISTORY_YEARS, len(windows), cutoff.isoformat(), today.isoformat(),
+            resume_window, resume_page + 1,
         )
         for index, (start, end) in enumerate(windows, start=1):
+            if index < resume_window:
+                continue
+            first_page = resume_page if index == resume_window else 0
             self.database.set_state(
                 sync_phase="full",
-                sync_progress=f"Refreshing {start:%b %Y} · window {index}/{len(windows)}",
+                sync_progress=f"Refreshing {start:%b %Y} · window {index}/{len(windows)} · page {first_page + 1}",
             )
-            fetched = self.fetch_window(start, end, "full", index, len(windows))
+            fetched = self.fetch_window(start, end, "full", index, len(windows), first_page)
             LOGGER.info(
                 "Snapshot progress %s/%s: %s through %s, %s records fetched; %s stored",
                 index, len(windows), start.isoformat(), end.isoformat(),
@@ -703,6 +738,8 @@ class SnapshotSync:
             sync_phase="idle",
             sync_progress="",
             last_error="",
+            full_sync_window=1,
+            full_sync_page=0,
         )
         LOGGER.info("Full snapshot complete: %s records; pruned %s outside the history window", self.database.record_count(), removed)
 

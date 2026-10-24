@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- Slow EUVD pagination and retry transient gateway 403 responses.
+- Resume a failed five-year snapshot from its last completed page.
+
+
 ## 0.1.5
 
 - Log full snapshot starts and per-month progress in Supervisor logs.
