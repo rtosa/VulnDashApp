@@ -1,6 +1,6 @@
 name: VulnDash
 slug: vulndash
-version: 0.1.1
+version: 0.1.2
 description: A local EUVD snapshot dashboard with SQLite storage and severity trends
 arch:
   - amd64
@@ -11,11 +11,12 @@ boot: auto
 ingress: true
 ingress_port: 8099
 ingress_entry: /
+webui: "http://[HOST]:[PORT:8099]"
 panel_icon: mdi:shield-search
 panel_title: VulnDash
 panel_admin: false
 ports:
-  8099/tcp: null
+  8099/tcp: 8099
 options:
   history_years: 5
   sync_interval_hours: 24

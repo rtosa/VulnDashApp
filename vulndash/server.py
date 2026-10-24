@@ -35,7 +35,7 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 INGRESS_MODE = os.environ.get("HA_INGRESS", "0").lower() in ("1", "true", "yes")
 PAGE_SIZE = 100
 FULL_REFRESH_DAYS = 7
-REQUEST_PAUSE_SECONDS = 0.15
+REQUEST_PAUSE_SECONDS = 0.5
 LOGGER = logging.getLogger("vulndash")
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -566,7 +566,7 @@ class SnapshotSync:
             EUVD_API + "?" + parameters,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "VulnDashApp/0.1.0 (local EUVD snapshot)",
+                "User-Agent": "VulnDashApp/0.1.2 (+https://github.com/rtosa/VulnDashApp)",
             },
         )
         for attempt in range(5):
@@ -576,7 +576,11 @@ class SnapshotSync:
                 return extract_items(payload)
             except HTTPError as error:
                 if error.code not in (429, 500, 502, 503, 504) or attempt == 4:
-                    raise RuntimeError(f"EUVD returned HTTP {error.code}") from error
+                    body = error.read(512).decode("utf-8", errors="replace").strip()
+                    detail = f": {body}" if body else ""
+                    raise RuntimeError(
+                        f"EUVD returned HTTP {error.code} for {request.full_url}{detail}"
+                    ) from error
                 retry_after = error.headers.get("Retry-After")
                 try:
                     delay = min(60, max(1, int(retry_after))) if retry_after else min(60, 2 ** attempt)

@@ -4,7 +4,7 @@ VulnDash downloads EUVD records and stores a rolling five-year snapshot in `/dat
 
 ## Home Assistant OS
 
-Copy the `vulndash` folder to `/addons/local/vulndash` on the Home Assistant host. In Home Assistant, open **Settings → Apps**, use **Reload**, then install **VulnDash**. The web interface opens through Home Assistant ingress, which handles authentication. No host port needs to be exposed.
+Copy the `vulndash` folder to `/addons/local/vulndash` on the Home Assistant host. In Home Assistant, open **Settings → Apps**, use **Reload**, then install **VulnDash**. The web interface opens through Home Assistant ingress and is also published on host port 8099 by default. Open `http://<home-assistant-address>:8099` on your local network, or use the VulnDash sidebar panel. If port 8099 is already in use, choose another host port in the app configuration. Direct host-port access does not pass through Home Assistant authentication; keep it on a trusted network and do not expose it to the internet.
 
 The app stores its database under `/data`, which Home Assistant persists and includes in app backups.
 

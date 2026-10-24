@@ -9,6 +9,6 @@ fi
 export DATA_DIR="${DATA_DIR:-/data}"
 export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8099}"
-export HA_INGRESS="${HA_INGRESS:-1}"
+export HA_INGRESS="${HA_INGRESS:-0}"
 
 exec python3 /app/server.py
