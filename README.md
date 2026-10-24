@@ -4,7 +4,7 @@ A Home Assistant app and standalone Docker deployment for the VulnDash vulnerabi
 
 ## Install as a Home Assistant app
 
-Once this repository is public on GitHub, add `https://github.com/rtosa/VulnDashApp` in Home Assistant under **Settings → Apps → Install app → ⋮ → Repositories**. The app will appear as **VulnDash**.
+Add `https://github.com/rtosa/VulnDashApp` in Home Assistant under **Settings → Apps → Install app → ⋮ → Repositories**. The app will appear as **VulnDash**.
 
 ## Choose a deployment
 
