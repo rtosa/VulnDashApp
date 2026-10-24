@@ -79,8 +79,24 @@ def normalize_date(value) -> str | None:
             return iso_utc(datetime.fromtimestamp(value, tz=timezone.utc))
         except (OverflowError, OSError, ValueError):
             return None
-    parsed = parse_iso(str(value))
-    return iso_utc(parsed) if parsed else str(value).strip() or None
+    text = str(value).strip()
+    parsed = parse_iso(text)
+    if parsed:
+        return iso_utc(parsed)
+    for date_format in (
+        "%b %d, %Y, %I:%M:%S %p",
+        "%b %d, %Y, %I:%M %p",
+        "%B %d, %Y, %I:%M:%S %p",
+        "%B %d, %Y, %I:%M %p",
+        "%b %d, %Y",
+        "%B %d, %Y",
+    ):
+        try:
+            parsed = datetime.strptime(text, date_format).replace(tzinfo=timezone.utc)
+            return iso_utc(parsed)
+        except ValueError:
+            continue
+    return text or None
 
 
 def flatten_text(value) -> str:
@@ -297,6 +313,38 @@ class Database:
                 );
                 """
             )
+            migration_key = "normalize_euvd_published_dates_v1"
+            migrated = connection.execute(
+                "SELECT 1 FROM sync_state WHERE key = ?", (migration_key,)
+            ).fetchone()
+            if migrated is None:
+                records = connection.execute(
+                    "SELECT record_key, payload_json FROM vulnerabilities"
+                ).fetchall()
+                for row in records:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    published = get_date(payload)
+                    updated = get_updated_date(payload)
+                    changes = []
+                    if published and parse_iso(published):
+                        changes.append(("published_at", published))
+                    if updated and parse_iso(updated):
+                        changes.append(("updated_at", updated))
+                    if changes:
+                        assignments = ", ".join(f"{column} = ?" for column, _ in changes)
+                        connection.execute(
+                            f"UPDATE vulnerabilities SET {assignments} WHERE record_key = ?",
+                            [value for _, value in changes] + [row["record_key"]],
+                        )
+                connection.execute(
+                    "INSERT INTO sync_state(key, value) VALUES(?, ?)",
+                    (migration_key, iso_utc()),
+                )
             connection.commit()
         finally:
             connection.close()

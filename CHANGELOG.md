@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Parse EUVD publication timestamps so date filters and charts include recent records.
+- Normalize existing SQLite date fields once during startup.
+
+
 ## 0.1.2
 
 - Enable direct access on host port 8099 by default and retain the ingress panel.
