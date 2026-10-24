@@ -11,15 +11,14 @@ import math
 import os
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(APP_DIR.parent / "data")))
@@ -610,33 +609,37 @@ class SnapshotSync:
                 "toDate": end.isoformat(),
             }
         )
-        request = Request(
-            EUVD_API + "?" + parameters,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "VulnDashApp/0.1.2 (+https://github.com/rtosa/VulnDashApp)",
-            },
-        )
+        url = EUVD_API + "?" + parameters
         for attempt in range(5):
             try:
-                with urlopen(request, timeout=60) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                return extract_items(payload)
-            except HTTPError as error:
-                if error.code not in (429, 500, 502, 503, 504) or attempt == 4:
-                    body = error.read(512).decode("utf-8", errors="replace").strip()
-                    detail = f": {body}" if body else ""
-                    raise RuntimeError(
-                        f"EUVD returned HTTP {error.code} for {request.full_url}{detail}"
-                    ) from error
-                retry_after = error.headers.get("Retry-After")
-                try:
-                    delay = min(60, max(1, int(retry_after))) if retry_after else min(60, 2 ** attempt)
-                except ValueError:
+                response = subprocess.run(
+                    [
+                        "curl", "--silent", "--show-error", "--location",
+                        "--max-time", "60", "--write-out",
+                        "\nVULNDASH_HTTP_STATUS:%{http_code}", url,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=65,
+                    check=False,
+                )
+                if response.returncode != 0:
+                    raise OSError(response.stderr.strip() or f"curl exited with {response.returncode}")
+                body, marker, status_text = response.stdout.rpartition("\nVULNDASH_HTTP_STATUS:")
+                if not marker:
+                    raise OSError("EUVD response did not include an HTTP status")
+                status = int(status_text.strip())
+                if status >= 400:
+                    detail = body[:512].strip()
+                    suffix = f": {detail}" if detail else ""
+                    if status not in (429, 500, 502, 503, 504) or attempt == 4:
+                        raise RuntimeError(f"EUVD returned HTTP {status} for {url}{suffix}")
                     delay = min(60, 2 ** attempt)
-                LOGGER.warning("EUVD HTTP %s; retrying in %s seconds", error.code, delay)
-                time.sleep(delay)
-            except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+                    LOGGER.warning("EUVD HTTP %s; retrying in %s seconds", status, delay)
+                    time.sleep(delay)
+                    continue
+                return extract_items(json.loads(body))
+            except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError) as error:
                 if attempt == 4:
                     raise RuntimeError(f"Could not fetch EUVD snapshot: {error}") from error
                 delay = min(60, 2 ** attempt)

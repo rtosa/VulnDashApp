@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- Use curl for EUVD downloads to match the working Home Assistant Terminal request.
+
+
 ## 0.1.3
 
 - Parse EUVD publication timestamps so date filters and charts include recent records.
