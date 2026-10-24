@@ -702,6 +702,30 @@ class SnapshotSync:
                 resume_window, resume_page = 1, 0
         else:
             resume_window, resume_page = 1, 0
+            failed_request = re.search(
+                r"https://euvdservices\.enisa\.europa\.eu/api/search\?([^\s<]+)",
+                state.get("last_error", ""),
+            )
+            if failed_request:
+                failed_query = parse_qs(failed_request.group(1).rstrip(":"))
+                failed_from = failed_query.get("fromDate", [""])[0]
+                failed_to = failed_query.get("toDate", [""])[0]
+                try:
+                    failed_page = int(failed_query.get("page", ["0"])[0])
+                except ValueError:
+                    failed_page = -1
+                for index, (window_start, window_end) in enumerate(windows, start=1):
+                    if (
+                        window_start.isoformat() == failed_from
+                        and window_end.isoformat() == failed_to
+                        and 0 <= failed_page < 500
+                    ):
+                        resume_window, resume_page = index, failed_page
+                        LOGGER.info(
+                            "Recovered snapshot resume point from previous error: window %s, page %s",
+                            resume_window, resume_page + 1,
+                        )
+                        break
         self.database.set_state(
             sync_phase="full",
             sync_progress=f"Refreshing {HISTORY_YEARS} years · resuming window {resume_window}/{len(windows)}",

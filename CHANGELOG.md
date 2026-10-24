@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Recover the failed page from existing error state when resuming an interrupted snapshot.
+
+
 ## 0.1.6
 
 - Slow EUVD pagination and retry transient gateway 403 responses.
