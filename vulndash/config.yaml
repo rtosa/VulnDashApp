@@ -1,0 +1,24 @@
+name: VulnDash
+slug: vulndash
+version: 0.1.0
+description: A local EUVD snapshot dashboard with SQLite storage and severity trends
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+ingress_entry: /
+panel_icon: mdi:shield-search
+panel_title: VulnDash
+panel_admin: false
+ports:
+  8099/tcp: null
+options:
+  history_years: 5
+  sync_interval_hours: 24
+schema:
+  history_years: int(1,5)
+  sync_interval_hours: int(1,168)
+

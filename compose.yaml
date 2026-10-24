@@ -1,0 +1,20 @@
+services:
+  vulndash:
+    build:
+      context: ./vulndash
+    image: vulndash-app:local
+    container_name: vulndash-app
+    restart: unless-stopped
+    ports:
+      - "${VULNDASH_BIND_ADDRESS:-127.0.0.1}:${VULNDASH_PORT:-8765}:8099"
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      HISTORY_YEARS: "${HISTORY_YEARS:-5}"
+      SYNC_INTERVAL_HOURS: "${SYNC_INTERVAL_HOURS:-24}"
+      SYNC_RECENT_DAYS: "${SYNC_RECENT_DAYS:-14}"
+      HOST: 0.0.0.0
+      PORT: "8099"
+      HA_INGRESS: "0"
+
