@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- Log full snapshot starts and per-month progress in Supervisor logs.
+- Show the current snapshot window and page in the dashboard status.
+
+
 ## 0.1.4
 
 - Use curl for EUVD downloads to match the working Home Assistant Terminal request.

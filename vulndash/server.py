@@ -680,12 +680,21 @@ class SnapshotSync:
             sync_progress=f"Refreshing {HISTORY_YEARS} years · 0/{len(windows)} monthly windows",
             last_error="",
         )
+        LOGGER.info(
+            "Starting full snapshot: %s years across %s monthly windows (%s through %s)",
+            HISTORY_YEARS, len(windows), cutoff.isoformat(), today.isoformat(),
+        )
         for index, (start, end) in enumerate(windows, start=1):
             self.database.set_state(
                 sync_phase="full",
                 sync_progress=f"Refreshing {start:%b %Y} · window {index}/{len(windows)}",
             )
-            self.fetch_window(start, end, "full", index, len(windows))
+            fetched = self.fetch_window(start, end, "full", index, len(windows))
+            LOGGER.info(
+                "Snapshot progress %s/%s: %s through %s, %s records fetched; %s stored",
+                index, len(windows), start.isoformat(), end.isoformat(),
+                fetched, self.database.record_count(),
+            )
         removed = self.database.prune(cutoff)
         timestamp = iso_utc()
         self.database.set_state(
